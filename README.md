@@ -182,11 +182,15 @@ Published to GHCR by GitHub Actions, built for `linux/amd64` and
 `linux/arm64`, with an SBOM and build provenance attached:
 
 ```
-ghcr.io/mikkerlo/bmw-cardata-collector:main          # tracks the main branch
+ghcr.io/mikkerlo/bmw-cardata-collector:0.1.0         # release (no "v" prefix)
+ghcr.io/mikkerlo/bmw-cardata-collector:0.1           # newest 0.1.x
 ghcr.io/mikkerlo/bmw-cardata-collector:sha-<sha>     # immutable, per commit
-ghcr.io/mikkerlo/bmw-cardata-collector:v0.1.0        # release tags
-ghcr.io/mikkerlo/bmw-cardata-collector:latest        # newest release tag only
+ghcr.io/mikkerlo/bmw-cardata-collector:main          # tracks the main branch
+ghcr.io/mikkerlo/bmw-cardata-collector:latest        # newest release only
 ```
+
+Note the image tag has **no `v` prefix** even though the git tag does
+(`v0.1.0` → image `0.1.0`).
 
 The package is public, so no `docker login` is needed to pull it. **Prefer a
 `sha-` or version tag in production**: `:main` and `:latest` move under you,
