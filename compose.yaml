@@ -1,0 +1,53 @@
+# Standalone collector. One service, one volume, no extras.
+#
+#   1. cp config.example.yaml ./config/config.yaml   and edit it
+#   2. printf 'BMW_CLIENT_ID=%s\n' '<uuid>' > .env   and chmod 600 .env
+#   3. docker compose run --rm collector auth login
+#   4. docker compose up -d
+#
+# BMW permits ONE streaming connection per account: do not run a second copy
+# of this service, on this host or any other, against the same BMW ID.
+
+services:
+  collector:
+    image: ghcr.io/mikkerlo/bmw-cardata-collector:main
+    # Build locally instead with: docker compose build
+    build:
+      context: .
+    container_name: bmw-cardata-collector
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Database and the 0600 refresh credential. Back this up.
+      - ./data:/data
+      - ./config:/config:ro
+    ports:
+      # Management endpoints are unauthenticated: localhost only.
+      - "127.0.0.1:9090:9090"
+    # The image already runs as uid 10001; ./data must be writable by it.
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, urllib.request
+          sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:9090/health/live", timeout=4).status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3

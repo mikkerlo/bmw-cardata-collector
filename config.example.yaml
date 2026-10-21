@@ -1,0 +1,88 @@
+# BMW CarData collector — example configuration.
+#
+# Copy to ./config/config.yaml and edit. Secrets do NOT belong in this file:
+# use ${ENV_VAR} (from compose's env_file) or ${file:/run/secrets/name}.
+#
+#   ${VAR}            required; startup fails with a clear error if unset
+#   ${VAR:-fallback}  optional, with a default
+#   ${file:/path}     contents of a file, stripped
+
+node:
+  # Appears in logs and in the collector_build metric. Any label you like.
+  name: vps-1
+
+storage:
+  sqlite_path: /data/collector.sqlite3
+  # FULL fsyncs every commit: an event reported as stored survives power loss.
+  # NORMAL is faster and can lose the most recent commits after a hard crash.
+  synchronous: FULL
+  # Events buffered in memory while the writer commits. On overflow the newest
+  # event is dropped and counted — QoS 0 means there is nothing to replay, so
+  # keep this comfortably above your burst rate.
+  queue_max: 10000
+
+bmw:
+  # From the BMW CarData portal. Never commit this value.
+  client_id: ${BMW_CLIENT_ID}
+
+  # Written by `collector auth login`, mode 0600. Holds a refresh token only.
+  credentials_file: /data/secrets/oauth.json
+
+  # Labels rows in the archive. Change it only if you archive two BMW
+  # accounts into the same database.
+  account_key: default
+
+  vehicles:
+    # allowlist   — collect exactly the VINs below (recommended)
+    # all_primary — collect every vehicle BMW maps to this account as primary
+    mode: allowlist
+    vins:
+      # - WBA00000000000000
+      # An empty allowlist collects nothing, and startup says so rather than
+      # quietly subscribing to every car on the account.
+
+  mqtt:
+    enabled: true
+    # per_vin  — one topic per allowlisted VIN (recommended)
+    # wildcard — "<gcid>/+", every mapped VIN; requires mode: all_primary
+    subscribe_mode: per_vin
+    keepalive: 60
+    reconnect_min_seconds: 5
+    reconnect_max_seconds: 300
+    # After an authorization or permission refusal, wait this long before
+    # retrying. A revoked client reconnecting every few seconds is abusive and
+    # will not start working any sooner.
+    auth_failure_backoff_seconds: 900
+
+  rest:
+    enabled: true
+    # BMW allows 50 requests per day per ACCOUNT, reset at 00:00 UTC, possibly
+    # shared with other clients signed in to the same account. Stay under it.
+    # The scheduler also holds back a small reserve for interactive commands.
+    requests_per_day_budget: 35
+    timeout_seconds: 30
+    max_retries: 3
+    tasks:
+      # Which VINs are mapped to the account. Cheap: 1 request per run.
+      - type: vehicle_mapping
+        interval_hours: 24
+
+      # Static-ish vehicle details. Costs 1 request per active VIN per run.
+      - type: basic_data
+        interval_hours: 24
+
+      # Telematic values for a container you created in the BMW portal (or
+      # with `collector containers create`). 1 request per active VIN per run.
+      # - type: telematic_snapshot
+      #   interval_hours: 4
+      #   container_id: your-container-id
+
+      # - type: tyre_diagnosis
+      #   interval_hours: 168
+
+telemetry:
+  # Binds inside the container; compose publishes it to 127.0.0.1 only.
+  # These endpoints are unauthenticated — do not expose them.
+  listen_host: 0.0.0.0
+  port: 9090
+  log_level: INFO

@@ -1,0 +1,92 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bmw-cardata-collector"
+version = "0.1.0"
+description = "Durable archival collector for BMW CarData MQTT streaming and REST snapshots"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+authors = [{ name = "mikkerlo" }]
+keywords = ["bmw", "cardata", "mqtt", "telemetry", "archival"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Archiving",
+]
+dependencies = [
+  "aiohttp>=3.10,<4",
+  "aiomqtt>=2.3,<3",
+  "PyYAML>=6.0,<7",
+  "prometheus-client>=0.21,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+  "ruff>=0.7,<1",
+  "mypy>=1.13,<2",
+  "types-PyYAML>=6.0,<7",
+]
+
+[project.urls]
+Homepage = "https://github.com/mikkerlo/bmw-cardata-collector"
+Issues = "https://github.com/mikkerlo/bmw-cardata-collector/issues"
+
+[project.scripts]
+collector = "bmw_collector.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bmw_collector"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "T20", "S", "BLE", "A", "PIE", "RET", "TRY"]
+ignore = [
+  "B008",     # function call in default argument: used for aiohttp timeouts
+  "TRY003",   # long messages outside the exception class: these are operator-facing
+  "TRY300",   # return-in-else after try: hurts readability here
+  "TRY400",   # logging.error over .exception is deliberate for handled failures
+  "RET504",   # named result before return documents intent
+  "S101",     # assert: used for invariants the type checker cannot see
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "T20", "S101", "S105", "S106", "S311", "SLF001",
+  "ASYNC100", "ASYNC109", "ASYNC110",  # polling loops are fine in tests
+  "RUF043",                            # match= patterns are plain substrings
+  "RET501",
+  "RUF059",                            # unused tuple members in unpacking reads better
+  "S107",                              # fabricated test tokens are not secrets
+  "ASYNC240",                          # test assertions may touch the filesystem
+  "TRY301",                            # raising inline is clearer in a test
+]
+"src/bmw_collector/__main__.py" = ["T20"]
+"src/bmw_collector/export.py" = ["T20"]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["bmw_collector"]
+mypy_path = "src"
+strict = true
+warn_unreachable = true
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["aiomqtt.*", "prometheus_client.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning:bmw_collector.*"]

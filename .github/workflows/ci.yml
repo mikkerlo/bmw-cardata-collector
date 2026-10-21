@@ -1,0 +1,169 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, type-check and test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Ruff lint
+        run: ruff check --output-format=github .
+
+      - name: Ruff format
+        run: ruff format --check --diff .
+
+      - name: Type check
+        run: mypy
+
+      - name: Tests
+        # The suite needs no BMW credentials and makes no network calls.
+        run: pytest -q --durations=10
+
+  pinned-requirements:
+    name: Image requirements match pyproject
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Resolve runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip freeze --exclude-editable | grep -v '^bmw-cardata-collector' | sort > /tmp/resolved.txt
+      - name: Compare with requirements.txt
+        run: |
+          grep -vE '^\s*(#|$)' requirements.txt | tr 'A-Z' 'a-z' | sort > /tmp/pinned.txt
+          tr 'A-Z' 'a-z' < /tmp/resolved.txt | sort > /tmp/actual.txt
+          if ! diff -u /tmp/pinned.txt /tmp/actual.txt; then
+            echo "::error::requirements.txt is out of date with pyproject.toml."
+            echo "Regenerate it: pip install -e . && pip freeze --exclude-editable | grep -v bmw-cardata-collector"
+            exit 1
+          fi
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan history with gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Refuse committed credentials, databases and exports
+        run: |
+          set -euo pipefail
+          # Files that must never be in the tree, whatever .gitignore says.
+          if git ls-files | grep -E '(^|/)(\.env|oauth\.json|config\.ya?ml)$' \
+               | grep -v '^config.example.yaml$'; then
+            echo "::error::a secret or live config file is committed"; exit 1
+          fi
+          if git ls-files | grep -E '\.(sqlite3|db|jsonl)$'; then
+            echo "::error::a database or event export is committed"; exit 1
+          fi
+          # A 17-character VIN in tracked files. Tests, docs, the example
+          # config and the workflows deliberately carry obviously fake ones;
+          # application source must carry none at all.
+          if git grep -nIE '\b(WBA|WBS|WBY|WMW|4US|5UX)[A-HJ-NPR-Z0-9]{14}\b' -- \
+               . ':!tests' ':!docs' ':!README.md' ':!config.example.yaml' \
+               ':!.github'; then
+            echo "::error::what looks like a real VIN is committed"; exit 1
+          fi
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: bmw-cardata-collector:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the image
+        run: |
+          set -euo pipefail
+          docker run --rm bmw-cardata-collector:ci --version
+          # The image must run as a non-root user.
+          test "$(docker run --rm --entrypoint id bmw-cardata-collector:ci -u)" != "0"
+          # Exercise the real write path end to end inside the container,
+          # with no BMW credentials involved.
+          mkdir -p ci-data ci-config
+          cat > ci-config/config.yaml <<'CONFIG'
+          node:
+            name: ci
+          storage:
+            sqlite_path: /data/collector.sqlite3
+          bmw:
+            client_id: ${BMW_CLIENT_ID}
+            credentials_file: /data/secrets/oauth.json
+            vehicles:
+              mode: allowlist
+              vins:
+                - WBA00000000000000
+            mqtt:
+              enabled: true
+            rest:
+              enabled: false
+          telemetry:
+            listen_host: 127.0.0.1
+            port: 9090
+            log_level: INFO
+          CONFIG
+          # The heredoc above is indented for readability; strip that indent.
+          sed -i 's/^          //' ci-config/config.yaml
+          docker run --rm \
+            -e BMW_CLIENT_ID=00000000-0000-0000-0000-000000000000 \
+            -v "$PWD/ci-data:/data" -v "$PWD/ci-config:/config:ro" \
+            --user "$(id -u):$(id -g)" \
+            bmw-cardata-collector:ci simulate --count 25 --plain-logs
+          docker run --rm \
+            -e BMW_CLIENT_ID=00000000-0000-0000-0000-000000000000 \
+            -v "$PWD/ci-data:/data" -v "$PWD/ci-config:/config:ro" \
+            --user "$(id -u):$(id -g)" \
+            bmw-cardata-collector:ci verify | tee verify.json
+          grep -q '"integrity_check": "ok"' verify.json
+          grep -q '"total": 25' verify.json

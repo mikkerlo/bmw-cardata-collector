@@ -1,0 +1,29 @@
+# Secrets and collected data — never commit
+.env
+*.env
+secrets/
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.jsonl
+oauth.json
+config.yaml
+config.yml
+!config.example.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
