@@ -176,6 +176,28 @@ Each event gets a locally unique UUID at receipt. Identical payloads are
 That UUID is preserved across export and import, so a replay into another
 database is idempotent without inventing new identities.
 
+## Container image
+
+Published to GHCR by GitHub Actions, built for `linux/amd64` and
+`linux/arm64`, with an SBOM and build provenance attached:
+
+```
+ghcr.io/mikkerlo/bmw-cardata-collector:main          # tracks the main branch
+ghcr.io/mikkerlo/bmw-cardata-collector:sha-<sha>     # immutable, per commit
+ghcr.io/mikkerlo/bmw-cardata-collector:v0.1.0        # release tags
+ghcr.io/mikkerlo/bmw-cardata-collector:latest        # newest release tag only
+```
+
+The package is public, so no `docker login` is needed to pull it. **Prefer a
+`sha-` or version tag in production**: `:main` and `:latest` move under you,
+and a redeploy would then silently change the running code.
+
+Publishing uses the workflow's `GITHUB_TOKEN` with `packages: write`; no
+personal access token is involved. GHCR took the repository's public
+visibility automatically — if a fork's package ends up private, make it public
+under *Package settings → Change visibility*, or keep it private and
+`docker login ghcr.io` on the host.
+
 ## Documentation
 
 * [docs/architecture.md](docs/architecture.md) — components, data flow, design decisions

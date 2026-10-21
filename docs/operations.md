@@ -22,12 +22,19 @@ docker compose up -d
 ```
 
 To pin a deployment, replace the `:main` tag in `compose.yaml` with an
-immutable one — `sha-<full-sha>` or a release tag — so a redeploy cannot
-silently change the running code:
+immutable reference so a redeploy cannot silently change the running code.
+A digest is the strongest form:
 
 ```yaml
-image: ghcr.io/mikkerlo/bmw-cardata-collector:sha-0123456789abcdef...
+# Strongest: cannot change at all.
+image: ghcr.io/mikkerlo/bmw-cardata-collector@sha256:<digest>
+# Or a per-commit tag, which the publish workflow always produces.
+image: ghcr.io/mikkerlo/bmw-cardata-collector:sha-<full-commit-sha>
 ```
+
+Each publish run prints the digest and the full tag list in its job summary.
+`docker buildx imagetools inspect ghcr.io/mikkerlo/bmw-cardata-collector:main`
+shows the current digest and platforms without pulling the image.
 
 ### Prerequisites the collector cannot do for you
 
