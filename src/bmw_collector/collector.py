@@ -25,8 +25,13 @@ from .writer import EventWriter
 
 _LOGGER = logging.getLogger(__name__)
 
-#: How often readiness and storage health are re-evaluated.
+#: How often readiness, authorization and phase are re-evaluated.
 SUPERVISE_INTERVAL_SECONDS = 15.0
+#: How often durable storage is probed with a real write. Each probe is an
+#: fsynced commit, so this is kept well above the supervise interval: the
+#: point is to notice a full or read-only volume while the car is parked and
+#: no real events are arriving, not to write constantly on idle hardware.
+STORAGE_PROBE_INTERVAL_SECONDS = 300.0
 #: How often to retry authorization while it is missing or broken.
 AUTH_RETRY_SECONDS = 60.0
 #: How often to checkpoint the WAL back into the main database file.
@@ -146,6 +151,19 @@ class Collector:
             metrics.bmw_auth_errors_total.inc()
             _LOGGER.error("authorization failed: %s", err)
             return False
+        except Exception as err:  # the collector must keep trying
+            # An unexpected failure here must not take the process down: the
+            # supervisor retries, and tearing the process down would also take
+            # the telemetry endpoints with it, leaving nothing to diagnose
+            # from. The restart policy is a worse tool than a retry loop for
+            # something that may well be transient.
+            self.health.set_phase(
+                Phase.AWAITING_AUTHORIZATION, error=f"{type(err).__name__}: {err}"
+            )
+            metrics.bmw_auth_errors_total.inc()
+            _LOGGER.exception("unexpected error while authorizing")
+            await self._incident("auth_unexpected_error", {"error": str(err)})
+            return False
 
         metrics.bmw_auth_reauthorization_required.set(0)
         metrics.bmw_auth_expires_at_seconds.set(self.auth.state.access_expires_at or 0)
@@ -263,6 +281,7 @@ class Collector:
         """Re-evaluate health, retry authorization, checkpoint the WAL."""
         last_checkpoint = time.monotonic()
         last_auth_attempt = 0.0
+        last_storage_probe = time.monotonic()
         while not self._stop.is_set():
             if not self._authorized and time.monotonic() - last_auth_attempt > AUTH_RETRY_SECONDS:
                 last_auth_attempt = time.monotonic()
@@ -273,7 +292,10 @@ class Collector:
             if self._authorized and self.auth is not None:
                 metrics.bmw_auth_expires_at_seconds.set(self.auth.state.access_expires_at or 0)
 
-            await self._evaluate_readiness()
+            probe_due = time.monotonic() - last_storage_probe > STORAGE_PROBE_INTERVAL_SECONDS
+            if probe_due:
+                last_storage_probe = time.monotonic()
+            await self._evaluate_readiness(probe_storage=probe_due)
 
             if time.monotonic() - last_checkpoint > CHECKPOINT_INTERVAL_SECONDS:
                 last_checkpoint = time.monotonic()
@@ -311,10 +333,11 @@ class Collector:
             return False, "; ".join(reasons)
         return True, None
 
-    async def _evaluate_readiness(self) -> None:
-        """Refresh the storage probe, then re-evaluate readiness and phase."""
-        self._storage_writable = await self.store.writable()
-        metrics.collector_storage_writable.set(1 if self._storage_writable else 0)
+    async def _evaluate_readiness(self, *, probe_storage: bool = True) -> None:
+        """Re-evaluate readiness and phase, optionally re-probing storage."""
+        if probe_storage:
+            self._storage_writable = await self.store.writable()
+            metrics.collector_storage_writable.set(1 if self._storage_writable else 0)
         self.health.refresh()
         if not self.health.ready:
             if self.health.phase in {Phase.RUNNING, Phase.DISCOVERING_VEHICLES}:

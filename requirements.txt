@@ -1,6 +1,7 @@
 # Pinned runtime dependencies for the container image.
-# Regenerate with:
-#   pip install -e . && pip freeze | grep -vE '^(-e|bmw-cardata-collector)'
+# Regenerate in a clean virtualenv with:
+#   pip install . && pip freeze --exclude-editable | grep -v '^bmw-cardata-collector'
+# CI fails if this drifts from what pyproject.toml resolves to.
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.5
 aiomqtt==2.5.1
@@ -10,7 +11,8 @@ frozenlist==1.8.0
 idna==3.20
 multidict==7.1.0
 paho-mqtt==2.1.0
-prometheus-client==0.26.0
+prometheus_client==0.26.0
 propcache==0.5.4
 PyYAML==6.0.3
+typing_extensions==4.16.0
 yarl==1.25.1

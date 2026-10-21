@@ -138,6 +138,10 @@ def build_app(health: HealthState) -> web.Application:
         )
 
     async def metrics_endpoint(_request: web.Request) -> web.StreamResponse:
+        # Re-evaluate first: collector_ready is meant to be alertable, so a
+        # scrape must not report readiness from whenever the supervisor last
+        # looked.
+        health.refresh()
         return web.Response(
             body=generate_latest(metrics.REGISTRY), content_type=CONTENT_TYPE_LATEST.split(";")[0]
         )

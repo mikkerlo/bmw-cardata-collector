@@ -63,8 +63,11 @@ jobs:
           pip freeze --exclude-editable | grep -v '^bmw-cardata-collector' | sort > /tmp/resolved.txt
       - name: Compare with requirements.txt
         run: |
-          grep -vE '^\s*(#|$)' requirements.txt | tr 'A-Z' 'a-z' | sort > /tmp/pinned.txt
-          tr 'A-Z' 'a-z' < /tmp/resolved.txt | sort > /tmp/actual.txt
+          # pip freeze and PyPI disagree on '-' vs '_' in some distribution
+          # names, so normalise both before comparing.
+          normalise() { tr 'A-Z' 'a-z' | tr '_' '-' | sort; }
+          grep -vE '^\s*(#|$)' requirements.txt | normalise > /tmp/pinned.txt
+          normalise < /tmp/resolved.txt > /tmp/actual.txt
           if ! diff -u /tmp/pinned.txt /tmp/actual.txt; then
             echo "::error::requirements.txt is out of date with pyproject.toml."
             echo "Regenerate it: pip install -e . && pip freeze --exclude-editable | grep -v bmw-cardata-collector"

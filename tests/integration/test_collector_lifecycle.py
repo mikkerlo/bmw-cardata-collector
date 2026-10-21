@@ -85,6 +85,10 @@ class StubAuth:
         """Succeed, or fail as scripted."""
         self.refreshes += 1
         if self.error is not None and self.refreshes <= self.fail_until:
+            # The real AuthManager records the OAuth error on its state before
+            # raising, and the readiness reason surfaces it.
+            self.state.last_error = getattr(self.error, "error", str(self.error))
+            self.state.error_count += 1
             raise self.error
         self.state.authorized = True
         self.state.gcid_present = True
@@ -212,17 +216,21 @@ async def test_collector_becomes_ready_and_archives_a_message(tmp_path: Path) ->
 
 async def test_liveness_responds_during_startup(tmp_path: Path) -> None:
     config = make_config(tmp_path, port=PORT + 1)
+    # An unexpected error, not an OAuth one: it must still leave the process
+    # alive and serving, or there is nothing to diagnose a stall from.
     auth = StubAuth(fail_until=99, error=RuntimeError("auth is wedged"))
     collector, task = await start_collector(config, broker=FakeBroker(), auth=auth)
     try:
         # Never ready, but telemetry must answer so the stall is diagnosable.
-        await wait_for(lambda: collector.health.phase is not Phase.STARTING)
+        await wait_for(lambda: collector.health.phase is Phase.AWAITING_AUTHORIZATION)
         status, body = await fetch(config.telemetry.port, "/health/live")
         assert status == 200
         assert body["status"] == "alive"
         ready_status, ready_body = await fetch(config.telemetry.port, "/health/ready")
         assert ready_status == 503
         assert ready_body["ready"] is False
+        assert "auth is wedged" in ready_body["last_error"]
+        assert not task.done()
     finally:
         await shutdown(collector, task)
 
@@ -293,7 +301,11 @@ async def test_a_storage_failure_makes_it_not_ready(tmp_path: Path) -> None:
     try:
         await wait_for(lambda: ready_now(collector))
         collector.store._conn = FullDiskConnection()  # type: ignore[assignment]
-        await wait_for(lambda: not ready_now(collector), timeout=30)
+        # The write probe runs every few minutes rather than every tick, so
+        # drive one directly instead of waiting it out. With events flowing a
+        # real commit failure reports this immediately.
+        await collector._evaluate_readiness(probe_storage=True)
+        assert not ready_now(collector)
         status, body = await fetch(config.telemetry.port, "/health/ready")
         assert status == 503
         assert "not writable" in body["last_error"]
