@@ -1,0 +1,74 @@
+# systemd unit for running the collector directly on a host (no container).
+#
+# Install:
+#   sudo cp deploy/bmw-cardata-collector.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now bmw-cardata-collector
+#
+# Inspect:
+#   systemctl status bmw-cardata-collector
+#   journalctl -u bmw-cardata-collector -f
+#
+# Adjust User, paths and the virtualenv location to match your host.
+
+[Unit]
+Description=BMW CarData archival collector
+Documentation=https://github.com/mikkerlo/bmw-cardata-collector
+After=network-online.target
+Wants=network-online.target
+
+# BMW allows one streaming connection per account and rate-limits REST, so a
+# crash loop must not hammer them: five starts per 10 minutes, then stop and
+# wait for a human.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=mikkerlo
+Group=mikkerlo
+WorkingDirectory=/home/mikkerlo/bmw-cardata-collector
+
+# Holds BMW_CLIENT_ID. Keep it mode 0600; systemd reads it as root.
+EnvironmentFile=/home/mikkerlo/bmw-cardata-collector/.env
+
+ExecStart=/home/mikkerlo/bmw-cardata-collector/.venv/bin/collector \
+    -c /home/mikkerlo/bmw-cardata-collector/config/config.yaml run
+
+# The collector drains its queue and checkpoints SQLite on SIGTERM; give it
+# room to finish rather than killing it mid-commit.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+Restart=always
+RestartSec=10s
+
+# Logs are already structured JSON on stderr; let the journal capture them.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bmw-cardata
+
+# --- hardening -------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The database and the refresh credential live here, and only here.
+ReadWritePaths=/home/mikkerlo/bmw-cardata-collector/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+# Outbound HTTPS to BMW and MQTT over TLS; nothing else is needed.
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

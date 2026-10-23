@@ -124,6 +124,10 @@ collector -c ./config/config.yaml auth login
 collector -c ./config/config.yaml run
 ```
 
+For an always-on host, `deploy/bmw-cardata-collector.service` is a hardened
+systemd unit that handles restarts, graceful shutdown and crash-loop limits —
+see [docs/operations.md](docs/operations.md#running-without-docker-under-systemd).
+
 ### Try it without a BMW account
 
 `simulate` drives the real queue, writer, SQLite and telemetry path with

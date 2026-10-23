@@ -36,6 +36,43 @@ Each publish run prints the digest and the full tag list in its job summary.
 `docker buildx imagetools inspect ghcr.io/mikkerlo/bmw-cardata-collector:main`
 shows the current digest and platforms without pulling the image.
 
+### Running without Docker, under systemd
+
+For a host where the collector should survive reboots and logouts,
+[`deploy/bmw-cardata-collector.service`](../deploy/bmw-cardata-collector.service)
+runs it from a virtualenv instead of a container:
+
+```bash
+python3 -m venv .venv && ./.venv/bin/pip install .
+./.venv/bin/collector -c config/config.yaml auth login     # one time
+
+sudo cp deploy/bmw-cardata-collector.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now bmw-cardata-collector
+
+systemctl status bmw-cardata-collector
+journalctl -u bmw-cardata-collector -f        # logs are already JSON
+```
+
+Adjust `User`, the paths and the virtualenv location for your host. The unit
+is hardened (`ProtectSystem=strict`, `ProtectHome=read-only`, no capabilities,
+`SystemCallFilter=@system-service`) with the data directory as the only
+writable path, so the database and credential must live under the directory
+named in `ReadWritePaths`.
+
+Two details worth keeping if you edit it:
+
+* `TimeoutStopSec=60` with `KillSignal=SIGTERM` — the collector drains its
+  write queue and checkpoints SQLite on SIGTERM, and killing it mid-commit
+  would throw away queued events.
+* `StartLimitBurst=5` / `StartLimitIntervalSec=600` — a crash loop must not
+  hammer BMW, which allows one streaming connection per account and
+  rate-limits REST. After five starts in ten minutes systemd gives up and
+  waits for a human.
+
+To remove it: `sudo systemctl disable --now bmw-cardata-collector` and delete
+`/etc/systemd/system/bmw-cardata-collector.service`.
+
 ### Prerequisites the collector cannot do for you
 
 All five are manual steps in the [BMW CarData
