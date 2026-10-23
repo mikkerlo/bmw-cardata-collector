@@ -477,3 +477,59 @@ async def test_the_first_message_counter_resets_per_connection(
     assert receiver._messages_this_connection == 1
     await receiver.stop()
     await writer.stop()
+
+
+async def test_an_idle_connection_still_recycles_before_token_expiry(
+    async_store: EventStore,
+) -> None:
+    """The regression test for a silent hourly disconnect.
+
+    With the recycle check gated behind message arrival, a parked car meant the
+    clock was never checked: the id token expired, BMW dropped the connection,
+    and the collector reconnected reactively every hour with a backoff gap.
+    """
+    auth = StubAuth(expiry=time.time() + TOKEN_RECYCLE_MARGIN_SECONDS + 0.3)
+    # No messages at all: exactly the parked-car case.
+    broker = FakeBroker()
+    receiver, writer = build(async_store, broker, auth=auth)
+    writer.start()
+    receiver.start()
+    await run_until(lambda: broker.connections >= 2, timeout=15)
+    await receiver.stop()
+    await writer.stop()
+    # It recycled on its own rather than waiting to be disconnected, and did
+    # so with a freshly minted token.
+    assert broker.credentials[0][1] != broker.credentials[1][1]
+
+
+async def test_a_message_arriving_at_the_recycle_deadline_is_not_lost(
+    async_store: EventStore,
+) -> None:
+    payload = stream_payload(VALID_VIN, index=99)
+    auth = StubAuth(expiry=time.time() + TOKEN_RECYCLE_MARGIN_SECONDS + 0.2)
+    broker = FakeBroker(messages_to_send=[FakeMessage(f"{GCID}/{VALID_VIN}", payload)])
+    receiver, writer = build(async_store, broker, auth=auth)
+    writer.start()
+    receiver.start()
+    await run_until(lambda: writer.committed >= 1, timeout=15)
+    await receiver.stop()
+    await writer.stop()
+    stored = await asyncio.to_thread(lambda: list(async_store.iter_events_sync()))
+    # QoS 0 has no redelivery, so a message dequeued as we tear the connection
+    # down must still reach storage.
+    assert any(e.payload == payload for e in stored)
+
+
+async def test_idle_recycle_does_not_spin(async_store: EventStore) -> None:
+    # A far-future expiry must not cause repeated reconnects just because the
+    # clock is now checked on a timer.
+    auth = StubAuth(expiry=time.time() + 3600)
+    broker = FakeBroker()
+    receiver, writer = build(async_store, broker, auth=auth)
+    writer.start()
+    receiver.start()
+    await run_until(lambda: broker.connections >= 1)
+    await asyncio.sleep(0.5)
+    await receiver.stop()
+    await writer.stop()
+    assert broker.connections == 1

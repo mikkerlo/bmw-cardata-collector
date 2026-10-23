@@ -44,6 +44,11 @@ _LOGGER = logging.getLogger(__name__)
 
 #: Recycle the connection this long before the id token expires.
 TOKEN_RECYCLE_MARGIN_SECONDS = 120
+#: How often to re-check the clock while waiting for messages. The recycle
+#: deadline must be honoured on an idle connection too — a parked car sends
+#: nothing for days, and waiting for a message before checking the clock means
+#: never checking it.
+CLOCK_CHECK_SECONDS = 5.0
 #: MQTT SUBACK reason code for "not authorized".
 SUBACK_NOT_AUTHORIZED = 135
 #: How often to log an activity summary while messages keep arriving. Without
@@ -277,18 +282,56 @@ class MqttReceiver:
         _LOGGER.info("subscribed to %d topic(s)", len(subscribed))
 
     async def _consume_until_token_expiry(self, client: Any) -> None:
-        """Read messages until the token nears expiry or the stream ends."""
+        """Read messages until the token nears expiry or the stream ends.
+
+        The deadline is checked on a timer rather than after each message:
+        gating it behind message arrival means an idle connection never checks
+        at all, so the token expires and BMW drops us reactively instead. A
+        parked car is silent for days, which makes idle the normal case.
+
+        The pending-message task is deliberately *not* cancelled on each clock
+        tick. ``aiomqtt``'s ``__anext__`` cancels its underlying queue read
+        when interrupted, and a message already dequeued at that moment is
+        discarded — with QoS 0 that would be unrecoverable data loss. The task
+        is carried across iterations instead, and anything it has already
+        delivered is archived before this returns.
+        """
         expiry = self._auth.id_token_expiry()
         recycle_at = expiry - TOKEN_RECYCLE_MARGIN_SECONDS if expiry else time.time() + 1800
-        async for message in client.messages:
-            self._handle_message(message)
-            if time.time() >= recycle_at:
-                # Reconnecting with a fresh token is the documented way to
-                # survive id-token expiry; the broker drops us otherwise.
-                _LOGGER.info("recycling MQTT connection before the id token expires")
-                return
-            if self._stop.is_set():
-                return
+        iterator = client.messages.__aiter__()
+        pending: asyncio.Task[Any] | None = None
+        try:
+            while not self._stop.is_set():
+                remaining = recycle_at - time.time()
+                if remaining <= 0:
+                    # Reconnecting with a fresh token is the documented way to
+                    # survive id-token expiry; the broker drops us otherwise.
+                    _LOGGER.info("recycling MQTT connection before the id token expires")
+                    return
+                if pending is None:
+                    pending = asyncio.ensure_future(iterator.__anext__())
+                done, _ = await asyncio.wait({pending}, timeout=min(remaining, CLOCK_CHECK_SECONDS))
+                if not done:
+                    continue  # clock tick only; the read stays armed
+                finished, pending = pending, None
+                try:
+                    message = finished.result()
+                except StopAsyncIteration:
+                    return
+                self._handle_message(message)
+        finally:
+            if pending is not None:
+                # Archive anything that landed while we were deciding to stop,
+                # then drop the read.
+                if pending.done() and not pending.cancelled():
+                    with contextlib.suppress(StopAsyncIteration, aiomqtt.MqttError):
+                        self._handle_message(pending.result())
+                else:
+                    pending.cancel()
+                    with contextlib.suppress(
+                        asyncio.CancelledError, StopAsyncIteration, aiomqtt.MqttError
+                    ):
+                        await pending
 
     # -- message handling ---------------------------------------------------
     def _handle_message(self, message: Any) -> None:

@@ -60,6 +60,36 @@ the intuitive fix — the intuitive reading of "dropped at exactly keepalive" is
 that the keepalive is *too short* — so measure before adjusting: the absence
 of any `PINGREQ` in the log is the tell.
 
+## 1b. The id token expires after ~1h and the broker enforces it
+
+`access_token`/`id_token` come back with `expires_in: 3599`. The broker holds
+the connection open for exactly that long and then closes it — the token is
+validated once at CONNECT but the session is still bound to its lifetime:
+
+```
+12:29:09  subscribed
+13:29:08  Disconnected    (held 60.0 min)
+14:29:13  Disconnected    (held 60.0 min)
+```
+
+So a long-lived subscription has to reconnect with a freshly refreshed token
+roughly hourly. That is expected and unavoidable; what matters is doing it
+*proactively*, a couple of minutes early, instead of being dropped and
+reconnecting after a backoff — a drop that lands while the car is reporting
+loses whatever arrives in the gap, and QoS 0 has no redelivery.
+
+**The trap:** the obvious implementation checks the clock after handling each
+message, which never runs on an idle connection. A parked car is silent for
+days, so the common case is precisely the one where the check never fires.
+The deadline has to be driven by a timer that fires with or without traffic.
+
+A second trap sits behind the first. `aiomqtt`'s `MessagesIterator.__anext__`
+reads the queue via a task and cancels that task if the read is interrupted;
+a message already dequeued at that instant is discarded. So `asyncio.wait_for`
+around the message read trades an hourly disconnect for an occasional silently
+dropped message, which is worse. The read has to be left armed across clock
+ticks rather than cancelled and re-issued.
+
 ## 2. Vehicle mappings come back as an array, not an object
 
 BMW's `CARDATA API` v1.0.0 spec types the 200 response of

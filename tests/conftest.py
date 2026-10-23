@@ -159,7 +159,12 @@ class FakeClient:
             yield message
         self._broker.stream_finished.set()
         # Stay open like a real broker would, instead of ending the stream.
-        await asyncio.sleep(3600)
+        # Finish on cancellation rather than staying suspended, so the
+        # generator can be closed when the loop shuts down.
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            return
 
 
 def stream_payload(vin: str = VALID_VIN, *, index: int = 0, timestamp: str | None = None) -> bytes:
