@@ -150,13 +150,15 @@ class MqttReceiver:
         while not self._stop.is_set():
             delay = 0.0
             try:
-                await self._connect_and_consume()
-                # A clean session resets the backoff, but never to zero: if the
-                # broker accepted and immediately closed the connection, a
-                # zero delay would hammer it in a tight loop (and, with every
-                # await completing synchronously, starve this event loop).
+                planned = await self._connect_and_consume()
                 attempt = 0
-                delay = self._config.reconnect_min_seconds
+                # A planned token recycle reconnects immediately: we chose to
+                # drop the session and the credentials are known good, so the
+                # backoff would just be an hourly hole in the archive. Any
+                # other clean return still waits, because a broker that
+                # accepts and immediately closes would otherwise be hammered
+                # in a tight loop.
+                delay = 0.0 if planned else self._config.reconnect_min_seconds
             except asyncio.CancelledError:
                 raise
             except (ReauthorizationRequiredError, PermissionError) as err:
@@ -212,7 +214,8 @@ class MqttReceiver:
         )
         return random.uniform(self._config.reconnect_min_seconds, max(ceiling, 1.0))  # noqa: S311
 
-    async def _connect_and_consume(self) -> None:
+    async def _connect_and_consume(self) -> bool:
+        """Hold one session. Returns whether it ended as a planned recycle."""
         gcid, id_token = await self._auth.id_token()
         topics = self._topics(gcid)
         if not topics:
@@ -220,7 +223,7 @@ class MqttReceiver:
                 "no VINs to subscribe to; waiting for vehicle discovery before connecting"
             )
             await asyncio.sleep(min(60.0, self._config.reconnect_max_seconds))
-            return
+            return False
 
         self.reconnects += 1
         metrics.bmw_mqtt_reconnects_total.inc()
@@ -249,7 +252,7 @@ class MqttReceiver:
             metrics.bmw_mqtt_connected.set(1)
 
             await self._subscribe(client, topics)
-            await self._consume_until_token_expiry(client)
+            return await self._consume_until_token_expiry(client)
 
     async def _subscribe(self, client: Any, topics: tuple[str, ...]) -> None:
         """Subscribe to every topic, treating a refusal as a real failure."""
@@ -281,8 +284,12 @@ class MqttReceiver:
             raise aiomqtt.MqttError("no topic could be subscribed")
         _LOGGER.info("subscribed to %d topic(s)", len(subscribed))
 
-    async def _consume_until_token_expiry(self, client: Any) -> None:
+    async def _consume_until_token_expiry(self, client: Any) -> bool:
         """Read messages until the token nears expiry or the stream ends.
+
+        Returns ``True`` when it ended because the token needed recycling, so
+        the caller can reconnect at once instead of waiting out a backoff
+        meant for failures.
 
         The deadline is checked on a timer rather than after each message:
         gating it behind message arrival means an idle connection never checks
@@ -307,7 +314,7 @@ class MqttReceiver:
                     # Reconnecting with a fresh token is the documented way to
                     # survive id-token expiry; the broker drops us otherwise.
                     _LOGGER.info("recycling MQTT connection before the id token expires")
-                    return
+                    return True
                 if pending is None:
                     pending = asyncio.ensure_future(iterator.__anext__())
                 done, _ = await asyncio.wait({pending}, timeout=min(remaining, CLOCK_CHECK_SECONDS))
@@ -317,7 +324,7 @@ class MqttReceiver:
                 try:
                     message = finished.result()
                 except StopAsyncIteration:
-                    return
+                    return False
                 self._handle_message(message)
         finally:
             if pending is not None:
@@ -332,6 +339,7 @@ class MqttReceiver:
                         asyncio.CancelledError, StopAsyncIteration, aiomqtt.MqttError
                     ):
                         await pending
+        return False
 
     # -- message handling ---------------------------------------------------
     def _handle_message(self, message: Any) -> None:

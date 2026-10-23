@@ -533,3 +533,46 @@ async def test_idle_recycle_does_not_spin(async_store: EventStore) -> None:
     await receiver.stop()
     await writer.stop()
     assert broker.connections == 1
+
+
+async def test_a_planned_recycle_reconnects_without_waiting(
+    async_store: EventStore,
+) -> None:
+    # Token already inside the recycle margin, so each session ends planned.
+    auth = StubAuth(expiry=time.time() + TOKEN_RECYCLE_MARGIN_SECONDS + 0.2)
+    broker = FakeBroker()
+    receiver, writer = build(
+        async_store,
+        broker,
+        auth=auth,
+        # A failure backoff long enough that waiting it out would fail this.
+        config=MqttConfig(reconnect_min_seconds=30.0, reconnect_max_seconds=60.0),
+    )
+    writer.start()
+    receiver.start()
+    # Three sessions well inside one backoff interval: the hourly token
+    # recycle must not cost a reconnect delay, which would be a recurring
+    # hole in the archive for no reason.
+    await run_until(lambda: broker.connections >= 3, timeout=15)
+    await receiver.stop()
+    await writer.stop()
+
+
+async def test_a_failed_connection_still_waits_out_the_backoff(
+    async_store: EventStore,
+) -> None:
+    broker = FakeBroker(connect_error=aiomqtt.MqttError("refused"))
+    receiver, writer = build(
+        async_store,
+        broker,
+        config=MqttConfig(reconnect_min_seconds=30.0, reconnect_max_seconds=60.0),
+    )
+    writer.start()
+    receiver.start()
+    await run_until(lambda: receiver.reconnects >= 1)
+    await asyncio.sleep(0.4)
+    await receiver.stop()
+    await writer.stop()
+    # The immediate-reconnect path must not leak into the failure path, or a
+    # broker that refuses us gets hammered.
+    assert receiver.reconnects == 1

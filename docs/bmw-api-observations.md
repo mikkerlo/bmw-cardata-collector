@@ -78,6 +78,12 @@ roughly hourly. That is expected and unavoidable; what matters is doing it
 reconnecting after a backoff — a drop that lands while the car is reporting
 loses whatever arrives in the gap, and QoS 0 has no redelivery.
 
+A planned recycle should also reconnect *immediately*. Reusing the
+failure backoff for it costs a few seconds off-air every hour for no reason —
+the credentials are known good and the disconnect was our own decision. The
+backoff exists for a broker that refuses or instantly closes the connection,
+which is a different situation.
+
 **The trap:** the obvious implementation checks the clock after handling each
 message, which never runs on an idle connection. A parked car is silent for
 days, so the common case is precisely the one where the check never fires.
