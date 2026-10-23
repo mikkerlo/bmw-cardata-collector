@@ -159,6 +159,58 @@ Two consequences worth keeping in mind when debugging silence:
   code that ignores the return value cannot tell a working subscription from a
   rejected one. Codes 0-2 are the granted QoS; anything higher is a refusal.
 
+## 3c. Stream attribute selection is portal-only — there is no API
+
+This is the one prerequisite that cannot be automated, and the reason a
+correctly-configured client can sit connected and silent forever.
+
+BMW's own streaming guide states that stream credentials become visible in the
+portal **only after you have selected the keys you want to receive data for**,
+and that the "Configure data stream" button activates only once the client ID
+is subscribed to CarData Streaming. Selection happens on a portal page; the
+CarData API (`api-cardata.bmwgroup.com`) has no endpoint for it, and the
+`cardata:streaming:read` scope grants reading a stream, not configuring one.
+
+The [BavarianData](https://github.com/JustChr/BavarianData) project (MIT) has
+investigated this further than we have and reached the same conclusion —
+["no CarData API … portal-only"](https://github.com/JustChr/BavarianData/blob/HEAD/docs/reference/stream-attribute-activation.md).
+Their notes record that the portal page drives a **market-portal** backend,
+not the CarData API:
+
+* `POST {www.bmw.<market>}/{locale}/utilities/bmw/api/cd/streams/{mapped_vehicle_id}`
+  with a flat `{"attributes": [...]}` body, returning `201`. The posted list
+  *replaces* the whole selection.
+* A companion `GET …/streams/{mapped_vehicle_id}?includeAttributes=true`
+  returns the currently selected attributes **plus the stream's MQTT host,
+  port, topic and username** — which makes it the natural way to verify a
+  selection and the advertised topic.
+* Authentication is the **interactive browser session cookies only** — no
+  bearer token — and the jar includes Akamai bot-defense cookies that a
+  headless client cannot mint. Requests also need browser-shaped
+  `Sec-Fetch-*` / `Accept-Language` headers or Akamai stalls the connection
+  rather than returning an error.
+* `mapped_vehicle_id` is a portal hash, not the VIN, and must be read from the
+  portal URL.
+
+They work around all of this by running a snippet in the browser on the portal
+page itself, so the session is used in place.
+
+**This collector does not and will not do that.** Browser login automation and
+portal manipulation are explicitly out of scope here, and reverse-engineered
+market-portal endpoints behind bot defenses are not a dependency worth taking
+for an archival service meant to run untouched for years. The manual portal
+step is a one-off; the collector's job is to be honest about needing it.
+
+Nothing is copied from BavarianData — the findings above are cited, and the
+topic shape we use was independently confirmed against BMW's own guide, which
+documents `username/topic` with the GCID as username and a VIN-derived topic,
+plus `username/+` for all mapped VINs.
+
+**Operationally:** if the stream is silent while the connection is healthy and
+the SUBACK is granted, check the portal's selection first. An empty selection
+is indistinguishable, from the client side, from a car that has nothing to
+say.
+
 ## 4. Authorization
 
 The device-code flow behaves as documented:

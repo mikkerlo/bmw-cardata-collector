@@ -48,9 +48,13 @@ Neither is a dependency of this project, and no code from either is included.
   [docs/architecture.md](docs/architecture.md#why-not-depend-on-zwecks-library).
   Its published copies of BMW's specification files were a useful
   cross-check while confirming endpoint shapes.
-* [JustChr/BavarianData](https://github.com/JustChr/BavarianData) — a Home
-  Assistant integration for BMW CarData. Studied for context only; nothing is
-  copied from it, and its name and branding are not used here.
+* [JustChr/BavarianData](https://github.com/JustChr/BavarianData) (MIT) — a
+  Home Assistant integration for BMW CarData. Studied for context only;
+  **no code is copied from it**, and its name and branding are not used here.
+  Its published research into stream-attribute activation being portal-only is
+  cited, with attribution, in
+  [docs/bmw-api-observations.md](docs/bmw-api-observations.md); that document
+  records the conclusion and endpoint shapes as findings, not as code.
 
 ## Trademarks
 
