@@ -46,6 +46,12 @@ _LOGGER = logging.getLogger(__name__)
 TOKEN_RECYCLE_MARGIN_SECONDS = 120
 #: MQTT SUBACK reason code for "not authorized".
 SUBACK_NOT_AUTHORIZED = 135
+#: How often to log an activity summary while messages keep arriving. Without
+#: one, nothing at INFO level ever shows that data is flowing: an operator
+#: tailing the journal sees the same silence whether the car is reporting or
+#: the subscription is quietly broken. Per-message logging is not an option —
+#: a drive produces bursts, and the log would bury everything else.
+ACTIVITY_SUMMARY_SECONDS = 300.0
 #: Floor on the pause between connection attempts, so the loop always yields.
 MIN_RECONNECT_YIELD_SECONDS = 0.001
 
@@ -91,6 +97,8 @@ class MqttReceiver:
         self.subscribed_topics: tuple[str, ...] = ()
         self.ever_connected = False
         self.auth_blocked = False
+        self._messages_this_connection = 0
+        self._last_summary_at = 0.0
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
@@ -229,6 +237,8 @@ class MqttReceiver:
             self.connected = True
             self.ever_connected = True
             self.auth_blocked = False
+            self._messages_this_connection = 0
+            self._last_summary_at = time.time()
             self.last_connect_at = time.time()
             self.last_error = None
             metrics.bmw_mqtt_connected.set(1)
@@ -293,6 +303,24 @@ class MqttReceiver:
         payload_bytes = bytes(payload) if isinstance(payload, bytes | bytearray) else b""
         topic = str(message.topic)
         vin, event_time, entity_id = _peek(payload_bytes, topic)
+
+        # Make "data is flowing" visible at INFO, without logging every
+        # message: the first one on each connection, then a periodic summary.
+        self._messages_this_connection += 1
+        if self._messages_this_connection == 1:
+            _LOGGER.info(
+                "receiving vehicle data: first message on this connection (%d bytes)",
+                len(payload_bytes),
+                extra={"payload_bytes": len(payload_bytes), "has_timestamp": bool(event_time)},
+            )
+            self._last_summary_at = self.last_message_at or time.time()
+        elif (self.last_message_at or 0) - self._last_summary_at >= ACTIVITY_SUMMARY_SECONDS:
+            _LOGGER.info(
+                "receiving vehicle data: %d message(s) on this connection",
+                self._messages_this_connection,
+                extra={"messages_this_connection": self._messages_this_connection},
+            )
+            self._last_summary_at = self.last_message_at or time.time()
 
         self._writer.submit(
             RawEvent(

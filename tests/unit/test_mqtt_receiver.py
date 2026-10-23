@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 import aiomqtt
+import pytest
 
 from bmw_collector.auth import AuthError, ReauthorizationRequiredError
 from bmw_collector.config import MqttConfig
@@ -425,4 +426,54 @@ async def test_queue_saturation_is_visible_rather_than_silent(
     # QoS 0 means a dropped event is gone for good; it must be counted.
     assert writer.dropped > 0
     assert writer.status()["dropped"] == writer.dropped
+    await writer.stop()
+
+
+async def test_the_first_message_is_announced_at_info(
+    async_store: EventStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    broker = FakeBroker(
+        messages_to_send=[FakeMessage(f"{GCID}/{VALID_VIN}", stream_payload(VALID_VIN))]
+    )
+    receiver, writer = build(async_store, broker)
+    writer.start()
+    with caplog.at_level("INFO", logger="bmw_collector.mqtt_receiver"):
+        receiver.start()
+        await run_until(lambda: receiver.messages_received >= 1)
+    await receiver.stop()
+    await writer.stop()
+    # At INFO, nothing else in the log distinguishes "car is parked" from
+    # "subscription is quietly broken".
+    assert "first message on this connection" in caplog.text
+    assert VALID_VIN not in caplog.text
+
+
+async def test_further_messages_are_not_logged_individually(
+    async_store: EventStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    messages = [
+        FakeMessage(f"{GCID}/{VALID_VIN}", stream_payload(VALID_VIN, index=i)) for i in range(40)
+    ]
+    broker = FakeBroker(messages_to_send=messages)
+    receiver, writer = build(async_store, broker)
+    writer.start()
+    with caplog.at_level("INFO", logger="bmw_collector.mqtt_receiver"):
+        receiver.start()
+        await run_until(lambda: receiver.messages_received >= 40)
+    await receiver.stop()
+    await writer.stop()
+    # A drive arrives in bursts; per-message INFO would bury everything else.
+    assert caplog.text.count("receiving vehicle data") == 1
+
+
+async def test_the_first_message_counter_resets_per_connection(
+    async_store: EventStore,
+) -> None:
+    broker = FakeBroker(messages_to_send=[FakeMessage(f"{GCID}/{VALID_VIN}", b"{}")])
+    receiver, writer = build(async_store, broker)
+    writer.start()
+    receiver.start()
+    await run_until(lambda: receiver.messages_received >= 1)
+    assert receiver._messages_this_connection == 1
+    await receiver.stop()
     await writer.stop()
