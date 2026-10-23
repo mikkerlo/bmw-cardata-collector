@@ -23,6 +23,8 @@ from typing import Any
 
 import yaml
 
+from .const import BMW_IDLE_DEADLINE_SECONDS
+
 _REF = re.compile(r"\$\{([^}]+)\}")
 
 
@@ -106,7 +108,13 @@ class MqttConfig:
     # ``per_vin`` subscribes to one topic per allowed VIN; ``wildcard`` uses
     # the documented "<gcid>/+" topic covering every mapped VIN.
     subscribe_mode: str = "per_vin"
-    keepalive: int = 60
+    # Deliberately well below BMW's idle deadline. Their broker closes an idle
+    # connection about 60s after the last packet, regardless of the keepalive
+    # we declare, while paho only sends PINGREQ once a full keepalive interval
+    # has already elapsed. At keepalive=60 the ping races that deadline and
+    # loses, every minute, forever — observed live on 2026-10-23. Half the
+    # deadline keeps the ping comfortably inside it.
+    keepalive: int = 30
     reconnect_min_seconds: float = 5.0
     reconnect_max_seconds: float = 300.0
     # Backoff floor applied after an authorization/permission failure, so a
@@ -226,7 +234,7 @@ def _parse_mqtt(raw: dict[str, Any]) -> MqttConfig:
     cfg = MqttConfig(
         enabled=bool(raw.get("enabled", True)),
         subscribe_mode=mode,
-        keepalive=int(raw.get("keepalive", 60)),
+        keepalive=int(raw.get("keepalive", 30)),
         reconnect_min_seconds=float(raw.get("reconnect_min_seconds", 5.0)),
         reconnect_max_seconds=float(raw.get("reconnect_max_seconds", 300.0)),
         auth_failure_backoff_seconds=float(raw.get("auth_failure_backoff_seconds", 900.0)),
@@ -235,6 +243,18 @@ def _parse_mqtt(raw: dict[str, Any]) -> MqttConfig:
         raise ConfigError("bmw.mqtt reconnect window must satisfy 0 < min <= max")
     if cfg.keepalive < 10:
         raise ConfigError("bmw.mqtt.keepalive must be at least 10 seconds")
+    if cfg.keepalive > BMW_IDLE_DEADLINE_SECONDS // 2:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "bmw.mqtt.keepalive is %ds. BMW's broker closes an idle connection about %ds "
+            "after the last packet whatever keepalive we declare, and the MQTT client only "
+            "pings once a full keepalive has elapsed — so anything above %ds risks a "
+            "reconnect every keepalive interval, losing any message that arrives in the gap.",
+            cfg.keepalive,
+            BMW_IDLE_DEADLINE_SECONDS,
+            BMW_IDLE_DEADLINE_SECONDS // 2,
+        )
     return cfg
 
 

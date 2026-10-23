@@ -140,7 +140,13 @@ Reconnect policy, in priority order:
 3. **Everything else** uses exponential backoff with full jitter, clamped to
    the configured window, so a BMW-side outage does not produce a synchronised
    reconnect storm across every collector in the world.
-4. **Even a clean disconnect waits** `reconnect_min_seconds`. If the broker
+4. **The keepalive is held at half BMW's idle deadline.** Their broker closes
+   an idle connection about 60s after the last packet whatever keepalive we
+   declare, and the MQTT client only pings once a full keepalive has elapsed,
+   so a 60s keepalive drops the connection every minute. Measured, not
+   documented — see
+   [bmw-api-observations.md](bmw-api-observations.md#1-the-broker-closes-idle-connections-at-60s-whatever-keepalive-you-ask-for).
+5. **Even a clean disconnect waits** `reconnect_min_seconds`. If the broker
    accepted and immediately closed the connection, a zero delay would hammer
    it in a tight loop.
 

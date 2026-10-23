@@ -208,6 +208,8 @@ under *Package settings → Change visibility*, or keep it private and
 
 ## Documentation
 
+* [docs/bmw-api-observations.md](docs/bmw-api-observations.md) — how the live
+  service actually behaves, including where it contradicts BMW's specs
 * [docs/architecture.md](docs/architecture.md) — components, data flow, design decisions
 * [docs/operations.md](docs/operations.md) — deploy, monitor, back up, restore, troubleshoot
 * [docs/security.md](docs/security.md) — secret handling, what is private, threat notes

@@ -240,6 +240,16 @@ Read `last_error` — it names the reason. Common ones:
 | `durable storage is not writable` | Volume permissions or a full disk |
 | `the last storage write failed` | Check `incidents`; events are being lost |
 
+### A reconnect every ~60 seconds
+
+The keepalive is racing BMW's idle deadline. Set `bmw.mqtt.keepalive` to 30 or
+less and restart. The giveaway is that the drops land at exactly the keepalive
+interval and the client logged no `PINGREQ` before them; the full mechanism is
+in
+[bmw-api-observations.md](bmw-api-observations.md#1-the-broker-closes-idle-connections-at-60s-whatever-keepalive-you-ask-for).
+Each gap loses whatever the car reported during it, so this is worth fixing
+rather than tolerating.
+
 ### Connected, subscribed, but no data
 
 Almost always step 3 of the prerequisites: no streaming descriptors selected in
@@ -301,24 +311,31 @@ What the automated suite covers, with no BMW credentials and no network:
 | No VIN or token in metrics, logs, incidents or auth status | unit + integration |
 | Container runs non-root; `simulate` + `verify` inside the image | CI |
 
-**Not verified — requires a real BMW account.** As of 2026-10-21 the author has
-not run this against live CarData, so the following are implemented from BMW's
-published specifications and are *unproven in production*:
+**Verified against a live BMW account on 2026-10-23**, with findings and
+evidence in [bmw-api-observations.md](bmw-api-observations.md):
 
-* that the device-code flow completes against the real GCDM endpoint;
-* that the real broker accepts `gcid` + `id_token` on port 9000 and that
-  `<gcid>/<vin>` is the right topic shape;
-* the exact wire shape of real streaming payloads (the archive does not care,
-  but the VIN/timestamp extraction used for indexing does);
-* that REST responses match the published schemas, and that BMW's error body
-  really carries `exveErrorId: CU-429` on quota exhaustion;
-* real-world token lifetimes and whether id-token expiry behaves as assumed;
-* whether the wildcard topic works as documented;
-* actual per-request quota accounting on BMW's side.
+* the device-code flow completes against the real GCDM endpoint, and the
+  refresh token rotates and persists across restarts;
+* the broker accepts `gcid` + `id_token` on port 9000 and grants a QoS 0
+  subscription on `<gcid>/<vin>`;
+* `mappings` and `basicData` return real payloads, archived byte-exact, one
+  request each against the daily allowance;
+* the quota ledger survives a restart without re-spending;
+* **BMW closes idle connections ~60s after the last packet regardless of the
+  declared keepalive** — found here, not in any BMW document, and a data-loss
+  bug at the previous default of 60.
 
-If any of these differ in practice, the raw archive is still correct — the
-payload bytes are stored before anything is interpreted. What may need
-adjusting is the indexing metadata and the error classification.
+**Still unproven**, because the account or the situation has not produced it:
+
+* **the shape of a real streaming message** — the vehicle has not reported
+  since collection began, so the VIN/timestamp extraction used for indexing is
+  unexercised. The raw archive is unaffected: bytes are stored before anything
+  is parsed.
+* quota exhaustion (403 / `exveErrorId: CU-429`);
+* the documented `<gcid>/+` wildcard topic;
+* refresh-token expiry after ~14 days of disuse;
+* the failure mode when a *differently*-identified second client connects on
+  the same account.
 
 To validate against a real account: complete the portal prerequisites, run
 `auth login`, then `auth status --refresh`, `vehicles list --refresh`,

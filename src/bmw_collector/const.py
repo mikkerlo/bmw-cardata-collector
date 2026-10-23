@@ -46,6 +46,13 @@ DEFAULT_SCOPES: Final[tuple[str, ...]] = (
 STREAMING_HOST: Final = "customer.streaming-cardata.bmwgroup.com"
 STREAMING_PORT: Final = 9000
 STREAMING_QOS: Final = 0
+#: Observed live on 2026-10-23: the broker closes a connection roughly 60s
+#: after the last packet in either direction, regardless of the keepalive the
+#: client declares in CONNECT. Not documented by BMW; measured. The MQTT
+#: client only sends PINGREQ once a whole keepalive interval has elapsed, so
+#: the configured keepalive has to stay well under this or the ping races the
+#: disconnect and loses.
+BMW_IDLE_DEADLINE_SECONDS: Final = 60
 
 # --- Documented service limits ---------------------------------------------
 # Integration guide: 50 REST requests per day per user, reset at 00:00 UTC.

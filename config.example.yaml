@@ -46,7 +46,12 @@ bmw:
     # per_vin  — one topic per allowlisted VIN (recommended)
     # wildcard — "<gcid>/+", every mapped VIN; requires mode: all_primary
     subscribe_mode: per_vin
-    keepalive: 60
+    # Keep this at or below 30. BMW's broker drops an idle connection about
+    # 60s after the last packet however long a keepalive we ask for, and the
+    # MQTT client only pings after a full keepalive has passed — so 60 here
+    # means a reconnect every minute, and any message arriving in the gap is
+    # lost (streaming is QoS 0, so there is no redelivery).
+    keepalive: 30
     reconnect_min_seconds: 5
     reconnect_max_seconds: 300
     # After an authorization or permission refusal, wait this long before

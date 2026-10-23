@@ -206,3 +206,54 @@ def test_lock_path_defaults_next_to_the_database() -> None:
         }
     )
     assert str(config.storage.resolved_lock_path()) == "/data/db.lock"
+
+
+def test_keepalive_defaults_below_bmw_idle_deadline() -> None:
+    from bmw_collector.const import BMW_IDLE_DEADLINE_SECONDS
+
+    config = parse_config(
+        {
+            "bmw": {
+                "client_id": "x",
+                "vehicles": {"vins": [VALID_VIN]},
+                "rest": {"enabled": False},
+            }
+        }
+    )
+    # BMW closes an idle connection ~60s after the last packet and the client
+    # only pings after a full keepalive, so the default must leave margin or
+    # the connection drops every keepalive interval, losing QoS 0 messages.
+    assert config.bmw.mqtt.keepalive <= BMW_IDLE_DEADLINE_SECONDS // 2
+
+
+def test_a_keepalive_that_races_the_deadline_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("WARNING"):
+        config = parse_config(
+            {
+                "bmw": {
+                    "client_id": "x",
+                    "vehicles": {"vins": [VALID_VIN]},
+                    "mqtt": {"keepalive": 60},
+                    "rest": {"enabled": False},
+                }
+            }
+        )
+    assert config.bmw.mqtt.keepalive == 60
+    assert "reconnect every keepalive interval" in caplog.text
+
+
+def test_a_safe_keepalive_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        parse_config(
+            {
+                "bmw": {
+                    "client_id": "x",
+                    "vehicles": {"vins": [VALID_VIN]},
+                    "mqtt": {"keepalive": 25},
+                    "rest": {"enabled": False},
+                }
+            }
+        )
+    assert "keepalive" not in caplog.text
