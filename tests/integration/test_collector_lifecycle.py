@@ -452,3 +452,37 @@ async def test_every_endpoint_answers(tmp_path: Path, endpoint: str) -> None:
         assert status == 200
     finally:
         await shutdown(collector, task)
+
+
+async def test_a_probe_never_reports_degraded_while_healthy(tmp_path: Path) -> None:
+    config = make_config(tmp_path, port=PORT + 14)
+    broker = FakeBroker()
+    collector, task = await start_collector(config, broker=broker)
+    try:
+        await wait_for(lambda: ready_now(collector))
+        # Readiness is recomputed per request; the phase must keep up with it
+        # rather than lagging a supervisor tick behind.
+        status, body = await fetch(config.telemetry.port, "/health/ready")
+        assert status == 200
+        assert body["ready"] is True
+        assert body["last_error"] is None
+        assert body["phase"] == "running"
+    finally:
+        await shutdown(collector, task)
+
+
+async def test_a_dropped_connection_shows_degraded_on_the_next_probe(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path, port=PORT + 15)
+    collector, task = await start_collector(config, broker=FakeBroker())
+    try:
+        await wait_for(lambda: ready_now(collector))
+        assert collector.receiver is not None
+        collector.receiver.connected = False
+        _status, body = await fetch(config.telemetry.port, "/health/ready")
+        # Still ready: it can archive whatever arrives next. Phase records it.
+        assert body["ready"] is True
+        assert body["phase"] == "degraded"
+    finally:
+        await shutdown(collector, task)

@@ -23,6 +23,10 @@ from . import metrics
 _LOGGER = logging.getLogger(__name__)
 
 
+class TelemetryBindError(Exception):
+    """Raised when the management port cannot be bound."""
+
+
 class Phase(StrEnum):
     """Lifecycle phases, surfaced so a stalled startup is diagnosable."""
 
@@ -71,6 +75,11 @@ class HealthState:
         self.ready = ready
         if error is not None:
             self.last_error = error
+        elif ready:
+            # Becoming ready invalidates whatever was keeping us from being
+            # ready. Leaving it in place reports a stale fault on a healthy
+            # service, which is worse than reporting nothing.
+            self.last_error = None
         metrics.collector_ready.set(1 if ready else 0)
 
     def register(self, name: str, provider: Callable[[], dict[str, Any]]) -> None:
@@ -181,7 +190,15 @@ class TelemetryServer:
         runner = web.AppRunner(build_app(self._health), access_log=None)
         await runner.setup()
         site = web.TCPSite(runner, self._host, self._port)
-        await site.start()
+        try:
+            await site.start()
+        except OSError as err:
+            await runner.cleanup()
+            raise TelemetryBindError(
+                f"cannot serve the management endpoints on {self._host}:{self._port}: {err}. "
+                "Another process already holds that port — change telemetry.port in the "
+                "configuration, or stop whatever is listening there."
+            ) from err
         self._runner = runner
         _LOGGER.info(
             "management endpoints listening",

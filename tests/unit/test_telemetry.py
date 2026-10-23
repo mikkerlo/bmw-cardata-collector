@@ -131,3 +131,41 @@ async def test_server_binds_and_stops(health: HealthState) -> None:
     await server.stop()
     # Stopping twice must not raise during a messy shutdown.
     await server.stop()
+
+
+def test_becoming_ready_clears_the_stale_reason(health: HealthState) -> None:
+    health.set_ready(False, error="MQTT has not connected yet")
+    assert health.last_error == "MQTT has not connected yet"
+    health.set_ready(True)
+    # A healthy service reporting a stale fault misleads whoever reads it.
+    assert health.last_error is None
+    assert health.snapshot()["last_error"] is None
+
+
+def test_a_new_failure_replaces_the_previous_one(health: HealthState) -> None:
+    health.set_ready(False, error="first reason")
+    health.set_ready(False, error="second reason")
+    assert health.last_error == "second reason"
+
+
+def test_readiness_evaluator_is_used_on_refresh(health: HealthState) -> None:
+    answers = iter([(False, "not yet"), (True, None)])
+    health.set_readiness_evaluator(lambda: next(answers))
+    health.refresh()
+    assert health.ready is False
+    assert health.last_error == "not yet"
+    health.refresh()
+    assert health.ready is True
+    assert health.last_error is None
+
+
+def test_a_broken_evaluator_fails_closed(health: HealthState) -> None:
+    def explode() -> tuple[bool, str | None]:
+        raise RuntimeError("evaluator bug")
+
+    health.set_ready(True)
+    health.set_readiness_evaluator(explode)
+    health.refresh()
+    # A bug in the check must not report a broken collector as ready.
+    assert health.ready is False
+    assert "readiness check failed" in (health.last_error or "")

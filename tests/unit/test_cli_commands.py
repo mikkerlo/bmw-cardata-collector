@@ -310,3 +310,24 @@ def test_commands_close_the_bmw_clients(config_path: Path) -> None:
     main(["-c", str(config_path), "containers", "list"])
     # A leaked aiohttp session produces warnings and holds sockets open.
     assert StubAuthManager.instances[0].closed is True
+
+
+def test_vehicles_list_refresh_counts_as_a_scheduled_mapping_run(
+    config_path: Path, tmp_path: Path
+) -> None:
+    payload = json.dumps([{"vin": VALID_VIN, "mappingType": "PRIMARY"}]).encode()
+    StubRestClient.outcomes = [ok(payload)]
+    assert main(["-c", str(config_path), "vehicles", "list", "--refresh"]) == 0
+
+    from bmw_collector.rest_scheduler import STATE_KEY_TASK_RUNS
+    from bmw_collector.store import EventStore
+
+    store = EventStore(tmp_path / "collector.sqlite3")
+    store.open_sync()
+    try:
+        runs = store.get_state_sync(STATE_KEY_TASK_RUNS) or {}
+        # Otherwise the scheduler immediately spends a second request asking
+        # BMW the same question, out of the same 50/day allowance.
+        assert "vehicle_mapping" in runs
+    finally:
+        store.close_sync()

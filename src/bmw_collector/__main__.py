@@ -163,6 +163,8 @@ async def _vehicles_list(config: Config, *, refresh: bool) -> int:
         if refresh:
             from .auth import AuthManager
             from .bmw_source import CarDataError, CarDataRestClient
+            from .rest_scheduler import STATE_KEY_TASK_RUNS
+            from .store import utc_now_iso
 
             manager = AuthManager(config.bmw.client_id, config.bmw.credentials_file)
             client = CarDataRestClient(manager)
@@ -173,6 +175,13 @@ async def _vehicles_list(config: Config, *, refresh: bool) -> int:
                 await store.append_event(
                     registry.mapping_event(response.body, response.metadata(task="vehicle_mapping"))
                 )
+                # Record it as a scheduler run too: this answered the same
+                # question the scheduled task would, and BMW's 50/day
+                # allowance is shared between the two.
+                runs = await store.get_state(STATE_KEY_TASK_RUNS) or {}
+                if isinstance(runs, dict):
+                    runs["vehicle_mapping"] = utc_now_iso()
+                    await store.set_state(STATE_KEY_TASK_RUNS, runs)
             except CarDataError as err:
                 print(f"could not refresh mappings: {err}", file=sys.stderr)
                 return 1

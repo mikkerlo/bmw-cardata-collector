@@ -248,7 +248,11 @@ class Collector:
         except asyncio.CancelledError:
             pass
         except Exception as err:  # report it, then shut down cleanly
-            _LOGGER.exception("fatal error")
+            # The cause goes on the message line deliberately: the traceback
+            # lands in a separate JSON field that a log viewer may not render,
+            # and a bare "fatal error" is useless when reading a container's
+            # last output.
+            _LOGGER.exception("fatal error: %s: %s", type(err).__name__, err)  # noqa: TRY401
             self.health.set_phase(Phase.FATAL, error=f"{type(err).__name__}: {err}")
             self.health.set_ready(False)
             exit_code = 1
@@ -330,7 +334,15 @@ class Collector:
                 reasons.append("MQTT has not connected yet")
 
         if reasons:
+            if self.health.phase in {Phase.RUNNING, Phase.DISCOVERING_VEHICLES}:
+                self.health.set_phase(Phase.DEGRADED)
             return False, "; ".join(reasons)
+
+        # Settle the phase here as well as on the supervisor tick, so a probe
+        # never reports "degraded" next to ready=true and no error.
+        if self.health.phase in {Phase.RUNNING, Phase.DEGRADED, Phase.DISCOVERING_VEHICLES}:
+            degraded = self.receiver is not None and not self.receiver.connected
+            self.health.set_phase(Phase.DEGRADED if degraded else Phase.RUNNING)
         return True, None
 
     async def _evaluate_readiness(self, *, probe_storage: bool = True) -> None:
@@ -338,13 +350,8 @@ class Collector:
         if probe_storage:
             self._storage_writable = await self.store.writable()
             metrics.collector_storage_writable.set(1 if self._storage_writable else 0)
+        # refresh() runs the readiness evaluator, which also settles the phase.
         self.health.refresh()
-        if not self.health.ready:
-            if self.health.phase in {Phase.RUNNING, Phase.DISCOVERING_VEHICLES}:
-                self.health.set_phase(Phase.DEGRADED)
-            return
-        degraded = self.receiver is not None and not self.receiver.connected
-        self.health.set_phase(Phase.DEGRADED if degraded else Phase.RUNNING)
 
     async def _incident(self, kind: str, details: dict[str, Any]) -> None:
         with contextlib.suppress(Exception):
