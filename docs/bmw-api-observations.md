@@ -132,6 +132,33 @@ Whether a *differently*-identified client on the same account is rejected
 cleanly or also causes eviction is **not tested** — BMW documents one
 streaming connection per user, but the failure mode is unobserved.
 
+## 3b. A granted SUBACK does not mean data will arrive
+
+Measured on this account: BMW grants the subscription with reason code `0` on
+the exact topic `<gcid>/<vin>`, on the `+` wildcard, and on `#`:
+
+```
+  exact     codes=[0]  -> GRANTED
+  wildcard  codes=[0]  -> GRANTED
+  hash      codes=[0]  -> GRANTED
+```
+
+**A grant proves only that the topic is acceptable, not that anything will
+ever be published to it.** With streaming descriptors unselected in the
+portal, the broker accepts the subscription and then stays silent forever —
+which looks exactly like a parked car. There is no API that reports whether
+descriptors are configured, so this cannot be checked from code; the portal is
+the only source of truth.
+
+Two consequences worth keeping in mind when debugging silence:
+
+* Subscribing to `<gcid>/#` is a useful probe. If nothing arrives on `#`
+  either, then nothing is being published under the account at all, and the
+  problem is upstream of any topic-shape question.
+* `subscribe()` returns the SUBACK codes rather than raising on refusal, so
+  code that ignores the return value cannot tell a working subscription from a
+  rejected one. Codes 0-2 are the granted QoS; anything higher is a refusal.
+
 ## 4. Authorization
 
 The device-code flow behaves as documented:

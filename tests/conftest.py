@@ -114,6 +114,10 @@ class FakeBroker:
     messages_to_send: list[FakeMessage] = field(default_factory=list)
     connect_error: Exception | None = None
     fail_subscribe: Exception | None = None
+    #: SUBACK reason codes to answer with. 0-2 grant the QoS; anything higher
+    #: is a refusal, which the real broker reports this way rather than by
+    #: raising.
+    suback_codes: tuple[int, ...] = (0,)
     end_stream_after: int | None = None
     connections: int = 0
     subscriptions: list[tuple[str, int]] = field(default_factory=list)
@@ -143,11 +147,12 @@ class FakeClient:
     async def __aexit__(self, *_exc: object) -> None:
         return None
 
-    async def subscribe(self, topic: str, qos: int = 0) -> None:
-        """Record the subscription, or fail as scripted."""
+    async def subscribe(self, topic: str, qos: int = 0) -> tuple[int, ...]:
+        """Record the subscription and answer with SUBACK codes."""
         if self._broker.fail_subscribe is not None:
             raise self._broker.fail_subscribe
         self._broker.subscriptions.append((topic, qos))
+        return self._broker.suback_codes
 
     @property
     def messages(self) -> AsyncIterator[FakeMessage]:

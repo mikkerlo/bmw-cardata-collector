@@ -51,6 +51,12 @@ TOKEN_RECYCLE_MARGIN_SECONDS = 120
 CLOCK_CHECK_SECONDS = 5.0
 #: MQTT SUBACK reason code for "not authorized".
 SUBACK_NOT_AUTHORIZED = 135
+#: SUBACK codes 0-2 are the granted QoS; anything above is a refusal (0x80
+#: in MQTT 3.1.1, a specific reason code in 5.0). The broker returns these
+#: instead of raising, so ignoring the return value of subscribe() makes a
+#: rejected subscription look exactly like a successful one — the connection
+#: stays up and simply never receives anything.
+SUBACK_MAX_GRANTED_QOS = 2
 #: How often to log an activity summary while messages keep arriving. Without
 #: one, nothing at INFO level ever shows that data is flowing: an operator
 #: tailing the journal sees the same silence whether the car is reporting or
@@ -61,6 +67,27 @@ ACTIVITY_SUMMARY_SECONDS = 300.0
 MIN_RECONNECT_YIELD_SECONDS = 0.001
 
 ClientFactory = Callable[..., Any]
+
+
+def _granted_codes(result: Any) -> list[int]:
+    """Normalise aiomqtt's SUBACK result to plain integers.
+
+    It returns a tuple of ints on MQTT 3.1.1 and a list of ``ReasonCode``
+    objects on 5.0.
+    """
+    if result is None:
+        return []
+    items = result if isinstance(result, list | tuple) else [result]
+    codes: list[int] = []
+    for item in items:
+        value = getattr(item, "value", item)
+        if isinstance(value, bool) or not isinstance(value, int | str):
+            continue  # pragma: no cover - unexpected SUBACK shape
+        try:
+            codes.append(int(value))
+        except ValueError:  # pragma: no cover - unexpected SUBACK shape
+            continue
+    return codes
 
 
 class MqttReceiver:
@@ -259,7 +286,7 @@ class MqttReceiver:
         subscribed: list[str] = []
         for topic in topics:
             try:
-                await client.subscribe(topic, qos=STREAMING_QOS)
+                codes = _granted_codes(await client.subscribe(topic, qos=STREAMING_QOS))
             except aiomqtt.MqttError as err:
                 # A refused subscribe usually means the data stream has not
                 # been configured in the BMW portal for this VIN, or the VIN is
@@ -276,6 +303,25 @@ class MqttReceiver:
                     or "not authorized" in str(err).lower()
                 ):
                     raise PermissionError(f"subscription refused by broker: {err}") from err
+                continue
+
+            # The broker reports a refusal as a reason code, not an exception,
+            # so an unchecked return value makes a rejected subscription look
+            # identical to a working one: connected, and silent forever.
+            refused = [c for c in codes if c > SUBACK_MAX_GRANTED_QOS]
+            if refused:
+                _LOGGER.error(
+                    "broker refused a topic subscription with reason code(s) %s. Check that "
+                    "streaming descriptors are selected for this vehicle in the BMW CarData "
+                    "portal and that the VIN is mapped to this account.",
+                    refused,
+                    extra={"suback_codes": refused},
+                )
+                await self._incident("mqtt_subscribe_refused", {"suback_codes": refused})
+                if SUBACK_NOT_AUTHORIZED in refused:
+                    raise PermissionError(
+                        f"broker refused the subscription: reason code(s) {refused}"
+                    )
                 continue
             subscribed.append(topic)
         self.subscribed_topics = tuple(subscribed)

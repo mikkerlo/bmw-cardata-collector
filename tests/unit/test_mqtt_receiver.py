@@ -576,3 +576,76 @@ async def test_a_failed_connection_still_waits_out_the_backoff(
     # The immediate-reconnect path must not leak into the failure path, or a
     # broker that refuses us gets hammered.
     assert receiver.reconnects == 1
+
+
+async def test_a_suback_failure_code_is_treated_as_a_refusal(
+    async_store: EventStore,
+) -> None:
+    """The bug this guards against is silence, not an error.
+
+    BMW answers a rejected SUBSCRIBE with a reason code rather than an
+    exception. Ignoring the return value left the collector connected,
+    reporting "subscribed", and receiving nothing — indistinguishable from a
+    parked car.
+    """
+    broker = FakeBroker(suback_codes=(0x80,))
+    receiver, writer = build(async_store, broker)
+    writer.start()
+    receiver.start()
+    await run_until(lambda: receiver.reconnects >= 1)
+    await asyncio.sleep(0.2)
+    await receiver.stop()
+    await writer.stop()
+    assert receiver.subscribed_topics == ()
+    incidents = await asyncio.to_thread(async_store.recent_incidents_sync)
+    refusals = [i for i in incidents if i["kind"] == "mqtt_subscribe_refused"]
+    assert refusals
+    assert refusals[0]["details"]["suback_codes"] == [0x80]
+
+
+async def test_a_not_authorized_suback_backs_off_hard(async_store: EventStore) -> None:
+    broker = FakeBroker(suback_codes=(135,))
+    receiver, writer = build(
+        async_store,
+        broker,
+        config=MqttConfig(
+            reconnect_min_seconds=0.01,
+            reconnect_max_seconds=0.02,
+            auth_failure_backoff_seconds=30.0,
+        ),
+    )
+    writer.start()
+    receiver.start()
+    await run_until(lambda: receiver.auth_blocked)
+    attempts = broker.connections
+    await asyncio.sleep(0.2)
+    await receiver.stop()
+    await writer.stop()
+    assert broker.connections == attempts
+
+
+@pytest.mark.parametrize("codes", [(0,), (1,), (2,)])
+async def test_granted_qos_codes_are_accepted(
+    async_store: EventStore, codes: tuple[int, ...]
+) -> None:
+    broker = FakeBroker(suback_codes=codes)
+    receiver, writer = build(async_store, broker)
+    writer.start()
+    receiver.start()
+    await run_until(lambda: len(receiver.subscribed_topics) >= 1)
+    await receiver.stop()
+    await writer.stop()
+    assert receiver.subscribed_topics == (f"{GCID}/{VALID_VIN}",)
+
+
+def test_reason_codes_normalise_from_either_mqtt_version() -> None:
+    from bmw_collector.mqtt_receiver import _granted_codes
+
+    class ReasonCode:
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+    assert _granted_codes((0,)) == [0]
+    assert _granted_codes([ReasonCode(0x80)]) == [0x80]
+    assert _granted_codes(None) == []
+    assert _granted_codes(0) == [0]
