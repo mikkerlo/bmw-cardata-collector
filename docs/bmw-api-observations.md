@@ -264,6 +264,46 @@ Importing an archive is not implemented here. The raw-event schema would take
 them as a third `source` alongside `mqtt` and `rest`, with the original file
 bytes preserved, but that is unbuilt and not implied by anything in the code.
 
+## 3f. The stream republishes unchanged values, so absence proves non-selection
+
+Measured over 105 minutes of an active vehicle with 59 descriptors selected:
+**8412 messages, of which 8142 were 59 descriptors each appearing exactly 138
+times.** Several of those had a single distinct value across all 138 messages:
+
+| Descriptor | Messages | Distinct values |
+| --- | --- | --- |
+| `…charging.acLimit.selected` | 138 | 1 |
+| `…charging.profile.isRcpConfigComplete` | 138 | 1 |
+| `…charging.connectionType` | 138 | 1 |
+
+A value that never changed was still published 138 times. **Publication is
+therefore not change-gated**: BMW pushes the whole selected set periodically,
+in bursts — 31 bursts over those 105 minutes, median gap 2.8 min, up to 974
+messages per burst, one descriptor per message.
+
+Two consequences, both practical:
+
+**1. A missing descriptor means it is not selected.** This is the diagnostic
+that matters. "It did not change, so it was not sent" is a dead end — if it
+were selected it would arrive anyway. The sharpest form of the test is to
+compare siblings: when four `vehicle.trip.segment.*` descriptors arrive six
+times each and the other six segment descriptors never appear, those six are
+not selected, because they would have ridden along in the same six events.
+
+**2. Volume scales with the selection, not with vehicle activity.** At 59
+descriptors this was ~0.73 KB per event and ~3.5 MB per hour of driving.
+Selecting all 246 streamable descriptors multiplies message count by ~4.2 —
+roughly **15 MB per hour of driving**, so about 5 GB a year at an hour a day.
+Comfortable for SQLite, but no longer negligible, and worth knowing before
+ticking everything.
+
+It also means most of the archive is repeated values. That does **not** make
+deduplication at ingest correct: without comparing against the previous value
+you cannot tell a repeat from a change, and the repeat timestamps are
+themselves evidence of when the car was awake. If storage ever matters, the
+answer is filesystem compression or a derived table, not discarding events on
+the write path.
+
 ## 4. Authorization
 
 The device-code flow behaves as documented:
