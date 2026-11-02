@@ -211,6 +211,59 @@ the SUBACK is granted, check the portal's selection first. An empty selection
 is indistinguishable, from the client side, from a car that has nothing to
 say.
 
+## 3d. Reading the portal's own state: the button label is the diagnostic
+
+Confirmed against a live account where both product toggles were on and the
+stream was nonetheless silent for ten days. The *CarData Streaming* panel
+reports its own state, and the button text distinguishes the two cases:
+
+| Panel shows | Meaning |
+| --- | --- |
+| **Datenstream konfigurieren** ("Configure data stream"), no credentials | No stream exists. **Nothing has been selected.** |
+| **Datenauswahl ändern** ("Change data selection") + **Stream löschen** + host/port/topic/username | Stream configured; a selection exists |
+
+BMW's own wording on the page states the order: *"Zuerst wählen Sie die
+Attribute aus. Danach wird der Datenstream eingerichtet und die
+Anmeldeinformationen für die Verbindung zu Ihrem Stream sind sichtbar."* —
+first select attributes, *then* the stream is set up and the connection
+credentials become visible.
+
+**So the absence of a credentials block is the fastest reliable check**, and it
+is independent of the two product toggles on *Technischer Zugang zu BMW
+CarData*, which can both be switched on while no stream exists at all. Those
+toggles are also readable from the DOM (`data-checked` on the inputs labelled
+*Zugang zur CarData API beantragen* and *CarData Stream*), which makes it easy
+to confirm they are not the problem.
+
+## 3e. Past data *is* recoverable — via the portal, not the stream
+
+The stream is QoS 0 with no replay, so anything missed while disconnected is
+gone *from the stream*. That is not the same as being gone from BMW.
+
+The portal's **BMW CarData** page offers two archive products, both delivered
+as a `.zip` of vehicle data files plus a separate metadata file describing the
+attributes:
+
+* **Datenarchiv** — the current data archive.
+* **Historisches Datenarchiv** — historical vehicle data over a longer period.
+  BMW warns preparation can take **up to 10 days**, and the download stays
+  available for roughly three weeks after it completes.
+
+Both are requested with a button on that page and downloaded over a
+time-limited pre-signed S3 URL. There is no CarData API for either; like
+stream selection, this is portal-only.
+
+This matters for two reasons. It is the **only** route to data from before a
+collector existed or from a window when it was down — including the gaps this
+collector reports honestly as unrecoverable *from streaming*. And it means
+"data lost to a reconnect gap" is better described as lost from the live feed
+than lost outright, provided the archive is requested while the period is
+still in range.
+
+Importing an archive is not implemented here. The raw-event schema would take
+them as a third `source` alongside `mqtt` and `rest`, with the original file
+bytes preserved, but that is unbuilt and not implied by anything in the code.
+
 ## 4. Authorization
 
 The device-code flow behaves as documented:

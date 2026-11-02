@@ -270,10 +270,13 @@ Work through it in this order:
 
 1. `collector auth status --refresh` — are both scopes granted? If yes, step 2
    is fine and is not your problem.
-2. Portal → your car → **BMW CarData** → *CarData Stream*. Does the panel show
-   a configuration status and **stream credentials** (host, port, topic,
-   username)? BMW only shows those once a selection exists. No credentials
-   means nothing is selected.
+2. Portal → your car → **BMW CarData** → *CarData Streaming*. Read the button:
+   **Datenstream konfigurieren** ("Configure data stream") with no credentials
+   block means **no stream exists and nothing is selected**.
+   **Datenauswahl ändern** ("Change data selection") alongside **Stream
+   löschen** and a host/port/topic/username block means a stream is
+   configured. This is independent of the two toggles in (1) — both can be on
+   while no stream exists.
 3. Press **Change data selection** (*Datenauswahl ändern*) and tick the fields
    you want. There are hundreds; start with the clusters you care about.
 4. Nudge the car — lock/unlock from the MyBMW app, or drive it. A parked car

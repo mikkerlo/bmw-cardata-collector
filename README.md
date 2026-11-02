@@ -28,7 +28,7 @@ Read this before deploying it.
 
 | Limitation | Why |
 | --- | --- |
-| **Data can be lost.** | BMW streams at **MQTT QoS 0** — at most once, no acknowledgement, no replay. Anything sent while the collector, your network or BMW's broker is down is gone permanently. There is no backfill API to recover it. |
+| **Data can be lost from the stream.** | BMW streams at **MQTT QoS 0** — at most once, no acknowledgement, no replay. Anything sent while the collector, your network or BMW's broker is down never reaches this archive, and no API can fetch it afterwards. BMW's portal does offer a *Datenarchiv* / *Historisches Datenarchiv* download (prepared in up to 10 days) which can cover such a gap — see [docs/bmw-api-observations.md](docs/bmw-api-observations.md). Importing one is not implemented here. |
 | **One connection per BMW account.** | BMW permits a single active streaming connection per user (GCID), *not* one per VIN. A second collector — or BavarianData, or any other client — signed in to the same account will fight this one for the connection. Run exactly one. |
 | **50 REST requests per day, per account.** | Documented BMW limit, reset at 00:00 UTC, and **shared** with every other client using the same account. The collector budgets conservatively (35/day by default) and stops rather than spending your whole allowance. |
 | **You must configure BMW's side yourself.** | Streaming descriptors are selected by hand in BMW's portal, and REST telematic data needs a container. The collector cannot choose these for you and does not try. |
