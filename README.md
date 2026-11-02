@@ -52,12 +52,25 @@ In the [BMW CarData portal](https://bmw-cardata.bmwgroup.com/):
 
 1. **Create a CarData client.** Note the **client ID** (a UUID). There is no
    client secret: authorization uses the device-code flow.
-2. **Subscribe that client to both products** — *CarData API* **and**
-   *CarData Stream*. Without both, BMW withholds the `cardata:api:read` /
+2. **Subscribe that client to both products** — switch on *Request access to
+   CarData API* **and** *CarData Stream* on the *Technical access to BMW
+   CarData* screen. Without both, BMW withholds the `cardata:api:read` /
    `cardata:streaming:read` scopes and everything here fails with 403.
-3. **Configure the data stream:** choose which descriptors are streamed. This
-   is a manual selection per account; **if you skip it the broker accepts your
-   connection and then refuses the subscription**, and no data arrives.
+   `collector auth status` shows which scopes were actually granted, so this
+   step is verifiable.
+3. **Tick the descriptors under *Data Selection*.** This is a **separate step
+   from the two toggles above** and it is the one people miss — having both
+   products switched on does *not* select any data.
+
+   Portal → vehicle overview → your car → **BMW CarData** → under *CarData
+   Stream*, press **Change data selection** (*Datenauswahl ändern*), then tick
+   the fields you want.
+
+   BMW streams **only** the ticked descriptors, and there is **no API** for
+   this selection. Skip it and the broker accepts your connection, grants the
+   subscription with reason code 0, and then publishes nothing — forever.
+   Healthy connection, zero messages, indistinguishable from a parked car.
+   See [docs/bmw-api-observations.md](docs/bmw-api-observations.md).
 4. **For REST telematic snapshots,** create a container listing the technical
    descriptors you want (portal, or `collector containers create`). Note its
    container ID.

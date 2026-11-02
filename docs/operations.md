@@ -80,10 +80,19 @@ portal](https://bmw-cardata.bmwgroup.com/), and the collector will not touch
 your BMW account settings:
 
 1. A CarData client exists and you have its client ID.
-2. That client is subscribed to **both** *CarData API* and *CarData Stream*.
-3. **Streaming descriptors are selected.** Skip this and the broker accepts
-   your connection and then refuses the subscription — the single most common
-   cause of "connected but no data".
+2. That client is subscribed to **both** *CarData API* and *CarData Stream*
+   (two toggles on *Technical access to BMW CarData*). Verify with
+   `collector auth status`: both `cardata:api:read` and
+   `cardata:streaming:read` must appear in the granted scopes.
+3. **Descriptors are ticked under *Data Selection*** — a **different step**
+   from the two toggles in (2), and the most common cause of "connected but no
+   data". Portal → your car → **BMW CarData** → *CarData Stream* → **Change
+   data selection** (*Datenauswahl ändern*).
+
+   The two toggles grant *access* to the stream; *Data Selection* decides what
+   is put on it. With nothing ticked, BMW grants the subscription and publishes
+   nothing. Confirmed over ten days on a live account: healthy connection,
+   granted SUBACK on `<gcid>/<vin>`, `+` and `#`, and zero messages.
 4. For `telematic_snapshot`, a container exists and you have its ID.
 5. The vehicle is mapped to the account.
 
@@ -252,11 +261,29 @@ rather than tolerating.
 
 ### Connected, subscribed, but no data
 
-Almost always step 3 of the prerequisites: no streaming descriptors selected in
-the portal. Check `bmw_mqtt_subscribed_topics` is non-zero and
-`collector incidents` for `mqtt_subscribe_refused`. Then confirm the car has
-actually been driven or woken since you subscribed — a parked car reports
-nothing.
+Almost always step 3 of the prerequisites — and note it is **not** the same as
+step 2. Having *CarData API* and *CarData Stream* both switched on grants
+access to the stream; it selects no data. If **Data Selection** is empty, BMW
+grants the subscription and publishes nothing, indefinitely.
+
+Work through it in this order:
+
+1. `collector auth status --refresh` — are both scopes granted? If yes, step 2
+   is fine and is not your problem.
+2. Portal → your car → **BMW CarData** → *CarData Stream*. Does the panel show
+   a configuration status and **stream credentials** (host, port, topic,
+   username)? BMW only shows those once a selection exists. No credentials
+   means nothing is selected.
+3. Press **Change data selection** (*Datenauswahl ändern*) and tick the fields
+   you want. There are hundreds; start with the clusters you care about.
+4. Nudge the car — lock/unlock from the MyBMW app, or drive it. A parked car
+   with a valid selection still reports nothing until something changes.
+5. Watch for `receiving vehicle data: first message on this connection` in the
+   journal.
+
+`collector incidents` showing `mqtt_subscribe_refused` means something else
+entirely: the broker rejected the topic, which points at mapping or
+permissions rather than selection.
 
 ### `reauthorization_required`
 
